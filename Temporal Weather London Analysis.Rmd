@@ -1,0 +1,363 @@
+---
+title: "Temporal Dynamics of Weather and Bike Usage in London: A Regression Analysis"
+author: "Shivanshi Tiwari"
+
+date: 
+output:
+  html_document: default
+  header-includes: \usepackage{color}
+fontsize: 12pt
+margin: 1in
+---
+<!--
+
+-->
+
+```{r setup, echo=FALSE, message=F, warning=F, include=FALSE}
+
+#==============================================================================
+#   This chunk will be used for every assignment
+#==============================================================================
+
+  # Clear the working space
+    rm(list = ls())
+
+### Load the packages (all must have been installed)
+    library(doBy)
+    library(dplyr)
+    library(foreign)
+    library(ggplot2)
+    library(knitr)
+    library(lmtest)
+    library(readstata13)
+    library(sandwich)
+    library(stargazer)
+    library(AER)
+    library(gdata)
+    library(wooldridge)
+    library(tidyverse)
+    library(readxl)
+
+cse=function(reg) {
+        rob=sqrt(diag(vcovHC(reg, type="HC1")))
+        return(rob)
+        }
+
+```
+
+```{r data, echo=FALSE, warning=FALSE, include=FALSE}
+### loading the data from R
+bike=as.data.frame(read_csv("FINAL_Bikesharing_dataset_1.csv"))
+# Group column is_holiday & is_weekend, and create variable non_workday
+bike$non_workday<-bike$is_holiday+bike$is_weekend
+```
+
+## Abstract
+
+This study investigates the nuanced impact of feels-like temperature on shared bike counts in London during 2016, exploring how various weather conditions and temporal factors intertwine with ridership. Analyzing log-linear regression models, it highlights significant interactions that influence bike demand. Findings reveal that while higher feels-like temperatures generally boost bike demand, factors like wind speed, workdays, daytime, and specific weather conditions modify this effect. Notably, high wind speeds, workdays, and daytime usage lessen the sensitivity to temperature, while rainy days curb humidity's influence. Despite multicollinearity, statistically significant effects validate the model's reliability, offering crucial insights for shared bike demand in diverse weather and temporal contexts. The study achieves an adjusted R-squared of 0.488, emphasizing its explanatory power in capturing these intricate relationships.
+
+## Question and Hypothesis
+**_What is the causal effect of feels like temperature on the shared bikes demand in London 2016?_**
+**_Are there other factors that also affect the decision of people using shared bikes?_**
+
+B1 = coefficient of feels-like temperature (t2)  
+Null hypothesis H0: B1 = 0  
+Alternative hypothesis HA: B1 ≠ 0  
+
+### Data description
+
+- "cnt" - Count of new bike shares per hour
+- "t1" - Real temperature in Celsius
+- "t2" - "Feels like" temperature in Celsius
+- "hum" - Humidity percentage.
+- "wind_speed" - Wind speed in km/h.
+- "is_holiday" - dummy field (1 for holiday, 0 for non-holiday)
+- "is_weekend" - dummy field (1 if the day is a weekend, 0 otherwise)
+- "non_workday"- dummy field (1 if the day is holiday or weekend, 0 otherwise)
+- "daytime"- timestamp dummy field (1 if time during 6am to 6pm, 0 otherwise)
+- "clear" - weather_code dummy field (1 for the day is clear, 0 for otherwise)
+- "cloudy" - weather_code dummy field (1 for the day is cloudy, 0 for otherwise)
+- "rainy" - weather_code dummy field (1 for the day is rainy, 0 for otherwise)
+- "snowy_frosty" - weather_code dummy field (1 for the day is snowy or frosty, 0 for otherwise)
+- "spring" - season dummy field (1 if the day is in spring, 0 otherwise)
+- "summer" - season dummy field (1 if the day is in summer, 0 otherwise)
+- "fall" - season dummy field (1 if the day is in fall, 0 otherwise)
+- "winter" - season dummy field (1 if the day is in winter, 0 otherwise)
+
+## Part 1: Descriptive statistics
+
+```{r stargazer, echo=FALSE, warning=FALSE, comment="" }
+# We create a table of descriptive statistics for continuous variables and the dependent variable:
+stargazer(bike[c("t1", "t2", "hum","wind_speed","cnt")], type="text", digits=2, summary.stat=c("n", "mean", "median", "sd","min","max"), title="Stats summary", flip=FALSE,
+          covariate.labels=c("Real temp","Feels temp","Humidity","Wind speed","Bike count","Non workday","Daytime"))
+```
+
+```{r histogram, echo=FALSE, warning=FALSE, message=FALSE, comment="",fig.width=8,fig.height=4,out.width="50%"}
+# We create a histogram of the feels like real temperature
+#ggplot(bike) + geom_histogram(aes(x=t1), col="blue", binwidth=1) + labs(title = "Real Teamperature")
+# We create a histogram of the feels like temperature
+#ggplot(bike) + geom_histogram(aes(x=t2), col="blue", binwidth=1) + labs(title = "Feels like Teamperature")
+# We create a histogram of humidity
+#ggplot(bike) + geom_histogram(aes(x=hum), col="blue", binwidth=2) + labs(title = "Humidity")
+# We create a histogram of wind speed
+#ggplot(bike) + geom_histogram(aes(x=wind_speed), col="blue", binwidth=2) + labs(title = "Wind Speed")
+# We create a histogram of shared bike counts
+#ggplot(bike) + geom_histogram(aes(x=cnt), col="blue", binwidth=200) + labs(title = "Shared Bike Count")
+```
+
+Based on the table of descriptive statistics:
+
+- The sample of 8,699 observations has an average real temperature at 12.38 Celsius degree, an average Feels like temperature at 11.38 Celsius degree, an average humidity level at 73.18%, an average wind speed of 15.17km/h, and average 1,164.45 sharing bikes per hour.
+
+- Note that except for the bike count, the median and mean are quite close in other variables. Specifically, the median for real temperature, wind speed and bike count are lower than their mean, indicating that the distributions of these three variables are slightly positively skewed (right-skewed), while the median for Feels-like temperature and humidity are higher than their mean, indicating that the distributions of these two variables are negatively skewed (left-skewed).
+
+- Eyeballing the standard deviation, we observe that there is a larger variation in humidity and a huge variation in bike count, indicating that the values are spread out over a large range from the mean in these two variables. For all the other three variables with smaller standard deviation, the sample variation around mean is rather small.
+
+Simultaneously, we notice that there is no identical statistical difference between real temperature(t1) and feels like temperature(t2), but the two variables are strongly correlated and we should only include one of them in analysis. Since the primary interest in this study is exploring factors that affect the decision of people using shared bikes, how people perceive and respond to the weather, then "Feels like temperature" could be more relevant than the real monitored temperature. **We then decide to adopt t2 as our variable of interest.**
+
+Now we explore whether there is a relationship between feels-like temperature and shared bike counts by plotting in graph:
+
+```{r images2, echo=FALSE, warning=FALSE, message=FALSE, comment=""}
+# We create a scatterplot of cnt against variable t2.
+ggplot(bike, aes(x=t2, y=cnt)) + geom_point(col="blue") + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts") + stat_smooth(method = "lm", col = "red", se=FALSE)
+```
+
+From the scatterplot, it shows that there is a **positive relationship** between shared bike demand and feels like temperature. Since as feels like temperature increases, the dots appear more towards upper-right side, indicating that the shared bike count also increases. We also observed that there is no eye-catching outlier in the sample. 
+
+## Part 2: Baseline Regression Analysis
+
+**Control variables**
+
+Initially, we identified other potential variables that might influence the shared bike count within the London market, considering two primary dimensions: **weather conditions** and **time**. Specifically, we selected two continuous variables, *humidity* and *wind_speed*, to account for fundamental weather factors. We also incorporated dummy variables based on timestamp—such as *non_workday* and *daytime*—to investigate potential time patterns affecting shared bike demand. Additionally, we created more dummies—*clear*, *cloudy*, *rainy*, and *snowy_frosty*—based on distinct weather categories to capture nuanced variations. Based on *feels like temperature(t2)*, our variable of interest, we then included these control variables in regression one by one.
+
+```{r regressions_linear+polynomial, echo=FALSE, warning=FALSE, message=FALSE, comment=""}
+# Model 1: Run a simple regression of cnt on t2.
+fit1<-lm(cnt~t2, data=bike)
+# Model 2: Run a multiple regression of cnt on t2, hum
+fit2<-lm(cnt~t2+hum, data=bike)
+# Model 3: Run a multiple regression of cnt on t2, hum, wind_speed
+fit3<-lm(cnt~t2+hum+wind_speed, data=bike)
+# Model 4: Run a multiple regression of cnt on t2, hum, wind_speed, non_workday,
+fit4<-lm(cnt~t2+hum+wind_speed+non_workday, data=bike)
+# Model 5: Run a multiple regression of cnt on t2, hum, wind_speed, non_workday, daytime
+fit5<-lm(cnt~t2+hum+wind_speed+non_workday+daytime, data=bike)
+# Model 6: Run a multiple regression of cnt on t2, hum, wind_speed, non_workday, daytime, cloudy, rainy
+fit6<-lm(cnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy, data=bike)
+# Model 7: Run a multiple regression of cnt on t2, hum, wind_speed, non_workday, daytime, cloudy, rainy, snowy_frosty
+fit7<-lm(cnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty, data=bike)
+
+# Build quadratic/cubic terms
+bike$t2sq<-(bike$t2)*(bike$t2)
+bike$t2cub<-(bike$t2)*(bike$t2)*(bike$t2)
+
+# Model 8: Add t2sq
+fit8<-lm(cnt~t2+t2sq+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty, data=bike)
+# Model 9: Add t2sq, t2cub
+fit9<-lm(cnt~t2+t2sq+t2cub+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty, data=bike)
+
+# Run a table including all regressions
+stargazer(fit1,fit2,fit3,fit4,fit5,fit6,fit7,fit8,fit9,
+          se=list(cse(fit1),cse(fit2),cse(fit3),cse(fit4),cse(fit5),cse(fit6),cse(fit7),cse(fit1),cse(fit2)), 
+        title="Linear & Polynomial regression of shared bike counts on different factors", type="text", 
+        star.cutoffs=NA, df=FALSE, digits=3)
+```
+
+```{r test1, echo=FALSE, warning=FALSE, message=FALSE, comment=""}
+# Run hypothesis tests on regression 2 results and see whether the quadratic and cubic specification in t2 is preferred to the linear specification in experience.
+lht(fit9,c("t2sq=0","t2cub=0"), white.adjust="hc1")
+lht(fit9,c("t2cub=0"), white.adjust="hc1")
+```
+
+We first run linear regressions. Based on the regression table, the coefficient estimate of the variable of interest - *t2* has a t-stat >1.96 throughout all the models and we are able to reject the null hypothesis at 95% level, proofing that the estimation is statistically significance. Also, the estimation of t2 is with a positive sign as expected - as feels like temperature increases, the amount of shared bike will increase accordingly. However, we observe that the estimations on coefficient of t2 varies among models.
+
+**Omitted Variable Bias**
+
+- As shown in the regression table, by adding variables *humidity*, *wind_speed* and *non_workday*, the estimation coefficient of t2 drop from 59.835 to around 36.1, indicating that model (1) suffers from upward omitted variable bias. Also in model (1), with R-square 0f 0.139, variable t2 solely explains only 13.9% of the sample variation of the regression. Therefore, we drop simple linear regression model (1).
+- By continue adding variable *daytime*, we observe that the coefficient estimate of *t2* has decrease from 36.063 to 35.149, indicating that model (4) still suffers from upward omitted variable bias.The adjusted R-square improved from 0.264 to 0.368, meaning that the multiple linear regression model(5) has reached a better fit. 
+- However, comparing model(5) and model(6/7), by adding more variables describing different weather type: *cloudy*, *rainy* and *snowy_frosty*, the coefficient estimate of *t2* fluctuates subtly and tends to be stable around 35.6. We observe a slightly downward omitted variable bias in model(5), and a higher adjusted R-square of 0.37 in model(7)
+
+**Statistic significance and sign of control variables**
+
+- **_humidity_**: the coefficient estimation of *hum* has t-stat > 1.96 throughout all regression models, meaning we are able to reject the null and proof the estimation statistically significant. The negative sign is align with expectation, as we assume that with humidity increases, the cycling environment (e.g road condition) will get wetter, discouraging people to ride shared bikes. Meanwhile, by adding other variables in model(6&7), the coefficient estimation of hum tends to be stable at -20.8, avoiding omitted variable bias.
+- **_wind_speed_**: in model(3&4), the coefficient estimation of *wind_speed* has t-stat 1.1 and 1.68, both < 1.96 and we fail to reject the null. However, by adding rainy and snowy_frosty to the regression, the coefficient estimations on wind_speed in model (5) are having t-stat > 1.96, suggesting proof of the estimation statistically significant. However, in model (6&7), the estimation of wind_speed became statistically insignificant again. Noted that there is a sign change from positive to negative from model (4) to (5-7), and a negative sign is align with our expectation. Intuitively, with a higher wind speed, people will feel harder to ride a bike.
+- **_non_workday_**: the coefficient estimation of *non_workday* has t-stat > 1.96 throughout all regression models, meaning we are able to reject the null and proof the estimation statistically significant. The negative sign is align with expectation, as we assume that with people tends to ride shared bikes less during holiday and weekend, since they use such transportation for work.
+- **_daytime_**: the coefficient estimation of *daytime* has t-stat > 1.96 in model(5-7), meaning we are able to reject the null and proof the estimation statistically significant.The positive sign is expected, since we assume that people use shared bikes to commute from home to work. From the regressions, we observe that the shared bike count is higher when it is during 6am to 6pm than other time. 
+- **_cloudy_**: the coefficient estimation of *cloudy* has t-stat < 1.96 in model (7&8), proofing the coefficient statistically insignificant. We observe an upward omitted variable bias in model (6) when not including other variables in the same weather category.
+- **_rainy_**: the coefficient estimation of *rainy* has t-stat > 1.96 in model(6&7), meaning we are able to reject the null and proof the estimation statistically significant.The negative sign is expected, as we assume that when it is rainy, it will discourage people to ride shared bikes, and the share bike count per hour will be less than when it does not rain.
+- **_snowy_frosty_**: the coefficient estimation of *snowy_frosty* has t-stat > 1.96 in model(7), meaning we are able to reject the null and proof the estimation statistically significant.The negative sign is align with expectation, as we assume that when it is snowy or frosty, it will discourage people to ride shared bikes, and the share bike count per hour will be less than when it does not snow or frost.
+
+**Measure of fit in multiple linear regressions**
+
+- We observe from the regression table that in model(7), the adjusted R-square is 0.370, meaning that *t2*, *hum*, *wind_speed*, *non_workday*, *daytime*, *cloudy*, *rainy*, *snowy_frosty* together explain 37% of the sample variation of the regression.
+- However, recall for the scatterplot of *t2* and *cnt*, we notice the probability of non-linear relationship between these two variables. Therefore, we continue to explore non-linear regressions for a better fit.
+
+
+**Polynomials vs Linear**
+
+We then build **quadratic** and **cubic** form of *t2*, as *t2sq*, *t2cub* and run polynomial regressions based on model(7). From the regression table, we notice obvious change of coefficient estimation of *t2* in model (8&9). 
+
+- We run first F-test on model (9). We hypothesize restricted model as a linear specification in *t2* and unrestricted model including quadratic and cubic specification in *t2*. As the F-stat 26.185 shows, we can reject the null at 0.1% confidence level, namely, the unrestricted model is preferred. Align with our analysis above, ruling out linear model(7).
+- We then run second F-test on model (9) and hypothesize restricted model as including quadratic specification in *t2*. As the F-stat 0.154 shows, we fail to reject the null of coefficient estimation of *t2cub* is zero. Hence, model(8) is preferred, it is unecessary to include *t2cub*.
+- In model(8), the estimated effect of increasing temperature from 10 degree to 15 degree on predicted shared bike count is: Delta-cnt = 2.653(15-10) + 1.447(15^2 - 10^2) = 194.14 bikes per hour. 
+- However, even the F-test shows polynomial form of regression is preferred, the adjusted R-square only have minor increase form 0.370 in model(7) to 0.374 in model(8). We then decide to continue explore another form of non-linear regression: logarithm.
+
+  
+
+**Logarithm vs Linear**
+
+Since shared bike count is a non-zero positive variable and the distribution of it is right-skewed, we take the natural log of a cnt as lcnt in regression. 
+
+```{r images_log, echo=FALSE, warning=FALSE, message=FALSE, comment="",fig.width=6,fig.height=4,out.width="50%"}
+bike$lcnt<-log(bike$cnt)
+# We create a scatterplot of cnt against variable t2.
+ggplot(bike, aes(x=t2, y=cnt)) + geom_point(col="blue") + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts") + stat_smooth(method = "lm", col = "red", se=FALSE)
+# We create a scatterplot of lcnt against variable t2.
+ggplot(bike, aes(x=t2, y=lcnt)) + geom_point(col="blue") + labs(title = "Log Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Log Bike counts") + stat_smooth(method = "lm", col = "red", se=FALSE)
+```
+
+We first plot the graph of lcnt of t2, the regression line fits better surrounded by sample dots compared to linear model.
+
+```{r regressions2, echo=FALSE, warning=FALSE, message=FALSE, comment=""}
+# Build interaction terms
+bike$t2_non_workday<-(bike$t2)*(bike$non_workday)
+bike$t2_daytime<-(bike$t2)*(bike$daytime)
+bike$t2_cloudy<-(bike$t2)*(bike$cloudy)
+bike$t2_snowy_frosty<-(bike$t2)*(bike$snowy_frosty)
+bike$t2_wind_speed<-(bike$t2)*(bike$wind_speed)
+bike$hum_rainy<-(bike$hum)*(bike$rainy)
+
+# Model 1: Run a multiple regression of cnt on t2, hum, wind_speed, non_workday, daytime, cloudy, rainy, snowy_frosty
+lr1<-lm(cnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty, data=bike)
+# Model 2: Run a log-linear regression based on model 8
+lr2<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty, data=bike)
+# Model 3: Add t2_wind_speed
+lr3<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_wind_speed, data=bike)
+# Model 4: Add t2_non_workday
+lr4<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_non_workday, data=bike)
+# Model 5: Add t2_daytime
+lr5<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_daytime, data=bike)
+# Model 6: Add t2_cloudy
+lr6<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_cloudy, data=bike)
+# Model 7: Add t2_snowy_frosty
+lr7<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_snowy_frosty, data=bike)
+# Model 8: Add hum_rainy
+lr8<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+hum_rainy, data=bike)
+# Model 9: Add t2_wind_speed, t2_nonwokday, t2_daytime, hum_rainy
+lr9<-lm(lcnt~t2+hum+wind_speed+non_workday+daytime+cloudy+rainy+snowy_frosty+t2_wind_speed+t2_non_workday+t2_daytime+hum_rainy, data=bike)
+
+# Run a table including all regressions 
+stargazer(lr1,lr2,lr3,lr4,lr5,lr6,lr7,lr8,lr9,
+          se=list(cse(lr1),cse(lr2),cse(lr3),cse(lr4),cse(lr5),cse(lr6),cse(lr7),cse(lr8),cse(lr9)), 
+        title="Log-Linear regression of shared bike counts with interaction terms", type="text",
+        star.cutoffs=NA, df=FALSE, digits=3)
+```
+
+We then run log-linear regression including 8 variables. Note that model (1) here is linear model (7) in previous regression table.
+
+From the regression table, we observe that:
+
+- Similar to multiple linear regression, *t2*, *hum*, *non_workday*, *daytime*, *rainy* and *snowy_frosty* all have t-stat > 1.96, indicating the coefficient estimation to be statistically significant. There sign of each variable is also the same in the log-linear formation as that in linear regression model(1). 
+- Different from linear regression, t-stat of *wind_speed* in model(2) is > 1.96, suggesting that we are able reject the null and the coefficient estimation of *wind_speed* is statistically significant.
+- Different from linear regression, *cloudy* appears to have a t-stat > 1.96 in model (2), indicating the coefficient estimation of *cloudy* to be statistically significant.The positive sign is reasonable. Since cloudy day is not too hot and the road condition is not wet or slippery (when assuming the weather is not rainy or snowy/frosty). We therefore assume that people will drive more shared bikes during a cloudy day.
+- Measure of fit: we observe that in log-linear regression model (2), the adjusted R-square is 0.465, indicating that *t2*, *hum*, *wind_speed*, *non_workday*, *daytime*, *cloudy*, *rainy* and *snowy_frosty* together explains 46.5% of the sample variation of the log-linear regression.
+
+Based on all the analysis above, we can now decide our log-linear model(2) as our baseline regression:
+
+***_log(cnt) = 0.038 * t2 - 0.026 * hum - 0.002 * wind_speed -0.092 * non_workday + 1.134 * daytime + 0.101 * cloudy - 0.132 * rainy - 1.273 * snowy_frosty_***
+
+According to baseline regression, **holding other variables constant**:
+
+- increasing *t2* by 1 Celsius degree, the new shared bike demand per hour will increase 3.8%
+- increasing *hum* by 1%, the new shared bike demand per hour will decrease 2.6%
+- increasing *wind_speed* by 1 km/h, the new shared bike demand per hour will decrease 0.2%
+- when it is a *non_workday*, the new shared bike demand per hour is 9.2% less than when it is a workday
+- when it is during *daytime*,the new shared bike demand per hour is 1.13 times more than when it is during the nighttime (from 6pm till 6am)
+- when it is *cloudy*, the new shared bike demand per hour is 10.1% more than when it is not cloudy
+- when it is *rainy*,the new shared bike demand per hour is 13.2% less than when it is not rainy
+- when it is *snowy_frosty*, the new shared bike demand per hour is 1.27 times less than when it is not snowy or frosty.
+- when it is *clear*, the new shared bike demand per hour is 1.3 times more than when it is not clear
+
+
+
+## Part3: Alternative Regression Specification 
+
+In order to explore whether the effect of *t2* on shared bike counts vary from other conditions, we created interaction terms: *t2_wind_speed*, *t2_non_workday*, *t2_daytime*, *t2_cloudy*, *t2_snowy_frosty*, *hum_rainy*. The interaction models in above table allows the effect of *feels-like temperature(t2)* on *shared bike count(cnt)* to vary with continuous variable *wind_speed*, and dummy variables *non_workday*, *day_time*, *cloudy* and *snowy_frosty*. It also allows the effect of *hum* on shared bike count to vary with dummy variable *rainy*. We now explore specific questions by interpreting the regressions with interaction terms.
+
+```{r test2, echo=FALSE, warning=FALSE, message=FALSE, comment="",out.width="50%"}
+# Run F-test on interaction terms
+lht(lr3,c("t2=0","t2_wind_speed=0"), white.adjust="hc1")
+lht(lr4,c("t2=0","t2_non_workday=0"), white.adjust="hc1")
+lht(lr5,c("t2=0","t2_daytime=0"), white.adjust="hc1")
+lht(lr6,c("t2=0","t2_cloudy=0"), white.adjust="hc1")
+lht(lr7,c("t2=0","t2_snowy_frosty=0"), white.adjust="hc1")
+lht(lr8,c("hum=0","hum_rainy=0"), white.adjust="hc1")
+```
+
+**Q1: Does the effect of feels-like temperature on new shared bike counts depend on wind speed?**
+
+- In model(3), the estimation effect of *t2* on *cnt* varies with wind_speed
+- The interaction term *t2_wind_speed* has t-stat = 5 > 1.96, we can reject the null hypothesis at 95% level, and the interaction term is statistically significant.
+- Delta(lcnt)/Delta(t2) = 0.028 + 0.001 * _wind_speed_, the formula means when wind_speed increase from 1 km/h to 2 km/h, the effect of *t2* on *cnt* is 0.1% increase. It could be explained that people are less sensitive to feels-like temperature when wind speed is higher, the factor itself already being a hinge of people to ride a bike. 
+- Based on the first F-test above, with F-stat 291.21, we can reject the null hypothesis that both *t2* and *wind_speed* coefficient are zero at 0.1%.
+
+**Q2: Does the effect of feels-like temperature on new shared bike counts depend on it is on weekday or holiday/weekend?**
+
+- Model(4) is equivalent to fitting two lines with different intercepts and slopes
+- The interaction term *t2_non_workday* has t-stat = 7.66 > 1.96, we can reject the null hypothesis at 95% level, and the interaction term is statistically significant.
+- Delta(lcnt)/Delta(t2) = -0.35 + 0.023 * _non_workday_,  the formula means when it is a workday, the effect of *t2* on *cnt* is 2.3% less than that of a holiday/weekend. It could be explained that people are less sensitive to feels-like temperature when they have to go to commute from home to office for work.
+- Based on the second F-test above, with F-stat 330.94, we can reject the null hypothesis that both *t2* and *daytime* coefficient are zero at 0.1%.
+
+**Q3: Does the effect of feels-like temperature on new shared bike counts depend on daytime or night time everyday?**
+
+- Model(5) is equivalent to fitting two lines with different intercepts and slopes
+- The interaction term *t2_daytime* has t-stat = 16.3 > 1.96, we can reject the null hypothesis at 95% level, and the interaction term is statistically significant.
+- Delta(lcnt)/Delta(t2) = 0.064 - 0.49 * _daytime_,  the formula means when it is during the daytime, the effect of *t2* on *cnt* is 49% less than during nighttime. It could be explained that people are less sensitive to feels-like temperature when the sun is up, and people will have other important reasons to ride a bike, such as work commuting, and leisure activities.
+- Based on the second F-test above, with F-stat 330.94, we can reject the null hypothesis that both *t2* and *daytime* coefficient are zero at 0.1%.
+
+**Q4: Does the effect of feels-like temperature on new shared bike counts depend on the whether it is cloudy? or snowy/frosty?**
+
+- Model(6&7) is equivalent to fitting two lines with different intercepts and slopes
+- The interaction term *t2_cloudy* has t-stat = 0.33 < 1.96, the interaction term *t2_snowy_frosty* has t-stat = 0.88 < 1.96, for both cases, we fail to reject the null hypothesis at 95% level, and the interaction term is not statistically significant.
+- However, based on the third and forth F-test above, with F-stat 227.06 and 275.98, we can reject the null hypothesis that both *t2* and *cloudy* coefficient are zero at 0.1%; we can also reject the null hypothesis that both *t2* and *snowy_frosty* coefficient are zero at 0.1%
+- Therefore, we can not determine the effect of t2 on cnt will varies by whether it is cloudy or snowy-frosty.
+
+**Q5: Additionally, since intuitively humidity might related to rain, we also try to explore does the effect of humidity on new shared bike counts depend on whether it is rainy?**
+
+- Model(8) is equivalent to fitting two lines with different intercepts and slopes
+- The interaction term *hum_rainy* has t-stat = 5.3 > 1.96, we can reject the null hypothesis at 95% level, and the interaction term is statistically significant.
+- Delta(lcnt)/Delta(hum) = -0.024 - 0.016 * _rainy_, the formula means when it is rainy, the effect of *hum* on *cnt* is 1.6% less than when it is not rainy. It could be explained that people are less sensitive to humidity when it is raining, the factor itself already being a hinge of people to ride a bike as the road is getting wet and slippery. 
+- Based on the fifth F-test above, with F-stat 465.6, we can reject the null hypothesis that both *hum* and *rainy* coefficient are zero at 0.1%.
+
+In a nutshell, from model(9) we can tell that the effect of *t2* on *cnt* depend on *wind_speed*, *non_workday* and *daytime*, while the effect of *hum* on *cnt* also depend on *rainy*. By including three interaction terms in model(9), the adjusted R-square became higher from 0.465 to 0.488 compared with model(2). Although multicollinearity is present, as standard error increases in *t2*, we still include them in the regression since both the main variable and the interaction terms are statistically significant.
+
+```{r images_interactions, echo=FALSE, warning=FALSE, message=FALSE, comment="",out.width="50%"}
+# For better illustration, we take a look at the scatterplot of interaction terms:
+# scatter plot of cnt against t2 and color the points by wind_speed
+#ggplot(bike, aes(x=t2, y=cnt, colour=wind_speed)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts")
+# scatter plot of cnt against t2 and color the points by whether it is non_workday
+#ggplot(bike, aes(x=t2, y=cnt, colour=non_workday)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts")
+# scatter plot of cnt against t2 and color the points by whether it is daytime
+#ggplot(bike, aes(x=t2, y=cnt, colour=daytime)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts")
+# scatter plot of cnt against t2 and color the points by whether it is cloudy
+#ggplot(bike, aes(x=t2, y=cnt, colour=cloudy)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts")
+# scatter plot of cnt against t2 and color the points by whether it is snowy/frosty
+#ggplot(bike, aes(x=t2, y=cnt, colour=snowy_frosty)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of Feels like Teamperature", x = "Feels like Temperature", y = "Bike counts")
+# scatter plot of cnt against hum and color the points by whether it is rainy
+#ggplot(bike, aes(x=hum, y=cnt, colour=rainy)) + geom_point(col="red") + geom_point(size=2) + labs(title = "Bike counts of HUmidity", x = "Humidity", y = "Bike counts")
+```
+
+## Part 4: Conclusion
+
+In summary, the log-linear regression model in our study provides valuable insights into the causal effect of feels-like temperature, and weather conditions on shared bike demands in London during 2016. Notably, an increase in feels-like temperature is associated with an increase in shared bike demand, while higher humidity and higher wind speed contribute to decreases in shared bike demand. The shared bike in non-workdays shows lower demand compared to workdays while the the daytime usage is also significantly higher than night time usage. Additionally, other weather conditions play a crucial role, with clear days and cloudy conditions positively impacting demand, while rainy and snowy/frosty conditions lead to substantial reductions. The interaction terms in our model further refines and highlights that the effect of feels-like temperature on shared bike demand are less sensitive when the wind speed is high, when it is on a weekday and during daytime. Moreover, our study also captured that the people are less sensitive to humidity when it is raining. The model exhibits a high explanatory power (R2 = 0.489), reinforcing its reliability in capturing the relationships between all the factors and shared bike counts.
+
+### Limitation
+
+**Internal Validity**
+
+- Sampling selection bias Data Reliability: there might be possible inconsistencies or errors in recollection in survey which could influence the study's outcomes( people's answer to feels-like temperature)
+- Reverse Causality: This consideration is unlikely to occur in our data given the shared bike demand generally does not influence temperature, time or any natural weather conditions.
+- Omitted Variable Bias: our model stabilizes in log-linear model (2) after we add on additional control variables  (i.e. non_workday, daytime, cloudy, rainy etc.) to our variable of interest, Feels-like temperature(t2). Our baseline  model has avoided to suffer  from much omitted variable bias. However, there is potential overlook of influential factors like socioeconomic status or specific urban infrastructure. May impact the accuracy of causal relationships derived from the analysis.
+
+**External Validity**
+
+- Generalizability Constraints: our findings are tailored to London's urban environment in 2016, limiting applicability to other cities or time periods. Variations in environmental, cultural, and infrastructural aspects can affect the relevance of results elsewhere. The results may not accurately represent bike sharing dynamics in differing urban settings or future scenarios.
